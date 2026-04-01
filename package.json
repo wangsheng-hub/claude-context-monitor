@@ -1,0 +1,93 @@
+{
+  "name": "claude-context-monitor",
+  "displayName": "Claude Context Monitor",
+  "description": "Real-time context window usage and token statistics for Claude Code sessions. Displays in VS Code status bar with detailed dashboard panel.",
+  "version": "1.0.0",
+  "publisher": "mi",
+  "author": {
+    "name": "mi"
+  },
+  "license": "MIT",
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other", "Visualization"],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "context",
+    "tokens",
+    "monitor",
+    "usage",
+    "anthropic",
+    "ai"
+  ],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "claude-context-monitor.showDetails",
+        "title": "Claude Context: Show Token Details",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "claude-context-monitor.refresh",
+        "title": "Claude Context: Refresh Session"
+      }
+    ],
+    "configuration": {
+      "title": "Claude Context Monitor",
+      "properties": {
+        "claudeContextMonitor.contextWindowSize": {
+          "type": "number",
+          "default": 1000000,
+          "description": "Context window size in tokens (default: 1,000,000 for 1M models)"
+        },
+        "claudeContextMonitor.pollInterval": {
+          "type": "number",
+          "default": 1500,
+          "minimum": 500,
+          "maximum": 10000,
+          "description": "Poll interval in milliseconds for session discovery (default: 1500ms)"
+        },
+        "claudeContextMonitor.statusBarPosition": {
+          "type": "string",
+          "enum": ["left", "right"],
+          "default": "right",
+          "description": "Status bar item position"
+        },
+        "claudeContextMonitor.warningThreshold": {
+          "type": "number",
+          "default": 0.5,
+          "minimum": 0.1,
+          "maximum": 0.95,
+          "description": "Context usage ratio to trigger warning color (default: 0.5 = 50%)"
+        },
+        "claudeContextMonitor.errorThreshold": {
+          "type": "number",
+          "default": 0.8,
+          "minimum": 0.2,
+          "maximum": 0.99,
+          "description": "Context usage ratio to trigger error color (default: 0.8 = 80%)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --allow-missing-repository",
+    "install-local": "vsce package --allow-missing-repository && code --install-extension claude-context-monitor-1.0.0.vsix --force"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": ""
+  }
+}
