@@ -2,6 +2,8 @@
 
 Real-time context window usage and token statistics for [Claude Code](https://claude.ai/code) sessions in VS Code.
 
+![Screenshot](screenshot.png)
+
 ## Features
 
 - **Status Bar** — Live display: `Claude 125.5K / 1M updated 3m ago`
