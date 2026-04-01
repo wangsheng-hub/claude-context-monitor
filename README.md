@@ -34,7 +34,9 @@ Claude Code writes session logs to `~/.claude/projects/<slug>/<sessionId>.jsonl`
 | `claudeContextMonitor.warningThreshold` | `0.5` | Warning color threshold (50%) |
 | `claudeContextMonitor.errorThreshold` | `0.8` | Error color threshold (80%) |
 
-## Install from VSIX
+## Install
+
+Download the latest `.vsix` from [Releases](https://github.com/wangsheng-hub/claude-context-monitor/releases), then:
 
 ```bash
 code --install-extension claude-context-monitor-1.0.0.vsix
