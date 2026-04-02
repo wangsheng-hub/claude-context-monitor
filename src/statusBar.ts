@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { SessionStats } from './types';
+import { SessionStats, ModelUsage } from './types';
 import { getConfig, MonitorConfig } from './config';
 
 function formatTokens(n: number): string {
@@ -23,6 +23,87 @@ function timeAgo(date: Date): string {
 
 function getContextSize(stats: SessionStats): number {
   return stats.lastInputTokens + stats.lastCacheReadTokens + stats.lastCacheCreationTokens;
+}
+
+// Pricing per million tokens (USD)
+interface ModelPricing {
+  input: number;
+  output: number;
+  cacheCreation: number;
+  cacheRead: number;
+}
+
+const MODEL_PRICING: Record<string, ModelPricing> = {
+  // Claude Opus 4 / 4.6
+  'claude-opus-4': { input: 15, output: 75, cacheCreation: 18.75, cacheRead: 1.5 },
+  // Claude Sonnet 4 / 4.6
+  'claude-sonnet-4': { input: 3, output: 15, cacheCreation: 3.75, cacheRead: 0.3 },
+  // Claude Haiku 4.5
+  'claude-haiku-4-5': { input: 0.8, output: 4, cacheCreation: 1, cacheRead: 0.08 },
+  // Claude 3.5 Sonnet
+  'claude-3-5-sonnet': { input: 3, output: 15, cacheCreation: 3.75, cacheRead: 0.3 },
+  // OpenAI GPT-5.2
+  'gpt-5.2': { input: 1.75, output: 14, cacheCreation: 1.75, cacheRead: 0.17 },
+  // OpenAI GPT-5.1
+  'gpt-5.1': { input: 1.25, output: 10, cacheCreation: 1.25, cacheRead: 0.12 },
+  // OpenAI GPT-5
+  'gpt-5': { input: 1.25, output: 10, cacheCreation: 1.25, cacheRead: 0.12 },
+  // OpenAI GPT-5 mini
+  'gpt-5-mini': { input: 0.25, output: 2, cacheCreation: 0.25, cacheRead: 0.02 },
+  // OpenAI GPT-5 nano
+  'gpt-5-nano': { input: 0.05, output: 0.40, cacheCreation: 0.05, cacheRead: 0.01 },
+  // OpenAI GPT-4o
+  'gpt-4o': { input: 2.5, output: 10, cacheCreation: 2.5, cacheRead: 1.25 },
+  // OpenAI GPT-4o-mini
+  'gpt-4o-mini': { input: 0.15, output: 0.6, cacheCreation: 0.15, cacheRead: 0.075 },
+};
+
+// Default pricing for unknown models (use Opus pricing as conservative estimate)
+const DEFAULT_PRICING: ModelPricing = { input: 15, output: 75, cacheCreation: 18.75, cacheRead: 1.5 };
+
+function getPricingForModel(modelName: string): ModelPricing {
+  const lower = modelName.toLowerCase();
+  // Exact key match first
+  for (const [key, pricing] of Object.entries(MODEL_PRICING)) {
+    if (lower.includes(key)) {
+      return pricing;
+    }
+  }
+  // Fuzzy fallback by family
+  if (lower.includes('opus')) { return MODEL_PRICING['claude-opus-4']; }
+  if (lower.includes('sonnet')) { return MODEL_PRICING['claude-sonnet-4']; }
+  if (lower.includes('haiku')) { return MODEL_PRICING['claude-haiku-4-5']; }
+  if (lower.includes('gpt-5.2')) { return MODEL_PRICING['gpt-5.2']; }
+  if (lower.includes('gpt-5.1')) { return MODEL_PRICING['gpt-5.1']; }
+  if (lower.includes('gpt-5-mini')) { return MODEL_PRICING['gpt-5-mini']; }
+  if (lower.includes('gpt-5-nano')) { return MODEL_PRICING['gpt-5-nano']; }
+  if (lower.includes('gpt-5')) { return MODEL_PRICING['gpt-5']; }
+  if (lower.includes('gpt-4o-mini')) { return MODEL_PRICING['gpt-4o-mini']; }
+  if (lower.includes('gpt-4o')) { return MODEL_PRICING['gpt-4o']; }
+  return DEFAULT_PRICING;
+}
+
+function calculateModelCost(usage: ModelUsage, pricing: ModelPricing): number {
+  return (
+    (usage.input / 1_000_000) * pricing.input +
+    (usage.output / 1_000_000) * pricing.output +
+    (usage.cacheCreation / 1_000_000) * pricing.cacheCreation +
+    (usage.cacheRead / 1_000_000) * pricing.cacheRead
+  );
+}
+
+function calculateTotalCost(modelUsage: Record<string, ModelUsage>): number {
+  let total = 0;
+  for (const [model, usage] of Object.entries(modelUsage)) {
+    total += calculateModelCost(usage, getPricingForModel(model));
+  }
+  return total;
+}
+
+function formatCost(cost: number): string {
+  if (cost >= 1) { return `$${cost.toFixed(2)}`; }
+  if (cost >= 0.01) { return `$${cost.toFixed(3)}`; }
+  return `$${cost.toFixed(4)}`;
 }
 
 export class StatusBarManager {
@@ -68,8 +149,10 @@ export class StatusBarManager {
     const ago = timeAgo(stats.lastUpdated);
     const ctxLabel = formatTokens(ctxWin);
 
-    this.item.text = `$(graph) Claude ${formatTokens(currentCtx)} / ${ctxLabel}  updated ${ago}`;
-    this.item.tooltip = `Context: ${formatTokens(currentCtx)} / ${ctxLabel}\nClick for details`;
+    const cost = calculateTotalCost(stats.modelUsage);
+    const costStr = cost > 0 ? `  ${formatCost(cost)}` : '';
+    this.item.text = `$(graph) Claude ${formatTokens(currentCtx)} / ${ctxLabel}${costStr}  updated ${ago}`;
+    this.item.tooltip = `Context: ${formatTokens(currentCtx)} / ${ctxLabel}${cost > 0 ? `\nEstimated Cost: ${formatCost(cost)}` : ''}\nClick for details`;
 
     const ratio = currentCtx / ctxWin;
     if (ratio > cfg.errorThreshold) {
@@ -117,6 +200,24 @@ export class StatusBarManager {
     const totalCacheCreate = stats.totalCacheCreation + stats.subagentCacheCreation;
     const totalCacheRead = stats.totalCacheRead + stats.subagentCacheRead;
     const totalMessages = stats.messageCount + stats.subagentMessageCount;
+    const totalCost = calculateTotalCost(stats.modelUsage);
+
+    // Build per-model cost rows
+    const modelEntries = Object.entries(stats.modelUsage).sort(
+      ([ma, a], [mb, b]) => calculateModelCost(b, getPricingForModel(mb)) - calculateModelCost(a, getPricingForModel(ma))
+    );
+    let modelCostRows = '';
+    for (const [model, usage] of modelEntries) {
+      const pricing = getPricingForModel(model);
+      const cost = calculateModelCost(usage, pricing);
+      const displayName = model.length > 30 ? model.slice(0, 27) + '...' : model;
+      modelCostRows += `
+        <div class="cost-row">
+          <span class="cost-model">${displayName}</span>
+          <span class="cost-detail">${formatTokens(usage.input)} in · ${formatTokens(usage.output)} out · ${formatTokens(usage.cacheRead)} cache</span>
+          <span class="cost-value">${formatCost(cost)}</span>
+        </div>`;
+    }
 
     // Progress bar color
     let barColor = '#7c6bff';
@@ -252,6 +353,41 @@ export class StatusBarManager {
     font-size: 12px;
     color: #888;
   }
+  .cost-total {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .cost-total .label { font-size: 15px; color: #ccc; }
+  .cost-total .value { font-size: 22px; font-weight: 700; color: #4ec9b0; }
+  .cost-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #2d2d4a;
+    border-radius: 8px;
+    margin-bottom: 6px;
+  }
+  .cost-model {
+    font-size: 13px;
+    color: #ccc;
+    font-weight: 500;
+    min-width: 120px;
+  }
+  .cost-detail {
+    font-size: 11px;
+    color: #666;
+    flex: 1;
+  }
+  .cost-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: #4ec9b0;
+    min-width: 60px;
+    text-align: right;
+  }
 </style>
 </head>
 <body>
@@ -303,6 +439,16 @@ export class StatusBarManager {
       <div class="sub">main ${formatTokens(stats.totalCacheRead)} · agent ${formatTokens(stats.subagentCacheRead)}</div>
     </div>
   </div>
+
+  <hr class="divider">
+
+  <!-- Cost -->
+  <div class="section-label">Estimated Cost</div>
+  <div class="cost-total">
+    <span class="label">Total</span>
+    <span class="value">${formatCost(totalCost)}</span>
+  </div>
+  ${modelCostRows}
 
   <hr class="divider">
 

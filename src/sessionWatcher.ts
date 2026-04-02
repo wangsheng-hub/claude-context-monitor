@@ -9,7 +9,8 @@ const SESSIONS_DIR = path.join(CLAUDE_DIR, 'sessions');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 
 function cwdToSlug(cwd: string): string {
-  return cwd.replace(/\//g, '-');
+  // Must match Claude Code's sanitizePath: replace ALL non-alphanumeric chars with '-'
+  return cwd.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
 export class SessionWatcher extends EventEmitter {
@@ -79,20 +80,25 @@ export class SessionWatcher extends EventEmitter {
         return;
       }
       const files = fs.readdirSync(SESSIONS_DIR).filter(f => f.endsWith('.json'));
-      const candidates: SessionMeta[] = [];
+      const matched: SessionMeta[] = [];
+      const all: SessionMeta[] = [];
 
       for (const f of files) {
         try {
           const raw = fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf-8');
           const meta: SessionMeta = JSON.parse(raw);
+          all.push(meta);
           // Match workspace path (exact or parent match)
           if (this.workspacePath.startsWith(meta.cwd) || meta.cwd.startsWith(this.workspacePath)) {
-            candidates.push(meta);
+            matched.push(meta);
           }
         } catch {
           // skip corrupt files
         }
       }
+
+      // If no workspace-matched sessions, fall back to all sessions
+      const candidates = matched.length > 0 ? matched : all;
 
       // Prefer: alive PID + most recently modified JSONL (= truly active session)
       let best: SessionMeta | null = null;
@@ -205,6 +211,8 @@ export class SessionWatcher extends EventEmitter {
           this.stats.lastCacheReadTokens = result.lastCacheRead;
           this.stats.lastCacheCreationTokens = result.lastCacheCreation;
         }
+        // Accumulate per-model usage
+        this.mergeModelUsage(result.modelBreakdown);
         changed = true;
       }
     }
@@ -225,6 +233,7 @@ export class SessionWatcher extends EventEmitter {
             this.stats.subagentCacheCreation += result.cacheCreation;
             this.stats.subagentCacheRead += result.cacheRead;
             this.stats.subagentMessageCount += result.messages;
+            this.mergeModelUsage(result.modelBreakdown);
             changed = true;
           }
         }
@@ -236,6 +245,20 @@ export class SessionWatcher extends EventEmitter {
     if (changed) {
       this.stats.lastUpdated = new Date();
       this.emit('update', this.stats);
+    }
+  }
+
+  private mergeModelUsage(breakdown: Record<string, { input: number; output: number; cacheCreation: number; cacheRead: number; messages: number }>): void {
+    if (!this.stats) { return; }
+    for (const [model, usage] of Object.entries(breakdown)) {
+      if (!this.stats.modelUsage[model]) {
+        this.stats.modelUsage[model] = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0, messages: 0 };
+      }
+      this.stats.modelUsage[model].input += usage.input;
+      this.stats.modelUsage[model].output += usage.output;
+      this.stats.modelUsage[model].cacheCreation += usage.cacheCreation;
+      this.stats.modelUsage[model].cacheRead += usage.cacheRead;
+      this.stats.modelUsage[model].messages += usage.messages;
     }
   }
 
@@ -253,10 +276,12 @@ export class SessionWatcher extends EventEmitter {
     lastInput: number;
     lastCacheRead: number;
     lastCacheCreation: number;
+    modelBreakdown: Record<string, { input: number; output: number; cacheCreation: number; cacheRead: number; messages: number }>;
   } {
     const result = {
       newOffset: offset, input: 0, output: 0, cacheCreation: 0, cacheRead: 0, messages: 0,
       lastInput: 0, lastCacheRead: 0, lastCacheCreation: 0,
+      modelBreakdown: {} as Record<string, { input: number; output: number; cacheCreation: number; cacheRead: number; messages: number }>,
     };
 
     try {
@@ -281,15 +306,29 @@ export class SessionWatcher extends EventEmitter {
           const entry: JournalEntry = JSON.parse(line);
           if (entry.type === 'assistant' && entry.message?.usage) {
             const u = entry.message.usage;
-            result.input += u.input_tokens || 0;
-            result.output += u.output_tokens || 0;
-            result.cacheCreation += u.cache_creation_input_tokens || 0;
-            result.cacheRead += u.cache_read_input_tokens || 0;
+            const inp = u.input_tokens || 0;
+            const out = u.output_tokens || 0;
+            const cc = u.cache_creation_input_tokens || 0;
+            const cr = u.cache_read_input_tokens || 0;
+            result.input += inp;
+            result.output += out;
+            result.cacheCreation += cc;
+            result.cacheRead += cr;
             result.messages++;
             // Track last message's tokens for context window estimation
-            result.lastInput = u.input_tokens || 0;
-            result.lastCacheRead = u.cache_read_input_tokens || 0;
-            result.lastCacheCreation = u.cache_creation_input_tokens || 0;
+            result.lastInput = inp;
+            result.lastCacheRead = cr;
+            result.lastCacheCreation = cc;
+            // Per-model breakdown
+            const model = entry.message.model || 'unknown';
+            if (!result.modelBreakdown[model]) {
+              result.modelBreakdown[model] = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0, messages: 0 };
+            }
+            result.modelBreakdown[model].input += inp;
+            result.modelBreakdown[model].output += out;
+            result.modelBreakdown[model].cacheCreation += cc;
+            result.modelBreakdown[model].cacheRead += cr;
+            result.modelBreakdown[model].messages++;
           }
         } catch {
           // skip malformed lines

@@ -5,6 +5,14 @@ export interface TokenUsage {
   cache_read_input_tokens: number;
 }
 
+export interface ModelUsage {
+  input: number;
+  output: number;
+  cacheCreation: number;
+  cacheRead: number;
+  messages: number;
+}
+
 export interface SessionStats {
   sessionId: string;
   totalInput: number;
@@ -22,6 +30,8 @@ export interface SessionStats {
   lastInputTokens: number;
   lastCacheReadTokens: number;
   lastCacheCreationTokens: number;
+  // Cost tracking: per-model usage breakdown
+  modelUsage: Record<string, ModelUsage>;
 }
 
 export interface SessionMeta {
@@ -63,5 +73,6 @@ export function emptyStats(sessionId: string): SessionStats {
     lastInputTokens: 0,
     lastCacheReadTokens: 0,
     lastCacheCreationTokens: 0,
+    modelUsage: {},
   };
 }
